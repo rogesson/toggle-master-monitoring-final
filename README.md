@@ -1,0 +1,19 @@
+# Projeto Feature Toggle Master - Monotoração - FIAP
+**Grupo 169**
+
+Participantes:
+
+Rogesson Barboza da Silva Souza
+rogessonb@gmail.com
+RM: RM373923
+Discord: _resque
+
+- Repositório da Aplicação: https://github.com/rogesson/toggle-master-monitoring
+
+Videos de Apresentação:
+
+- Parte 1 - Toggle Master - Fase 4 - Monitoração
+  https://youtu.be/ZTrEJ9GQysI
+
+- Parte 2 - Toggle Master - Fase 4 - Alertas e recuperação
+  https://youtu.be/AF6Gu3NtTCs
