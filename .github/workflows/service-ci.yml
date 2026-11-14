@@ -1,0 +1,164 @@
+name: Microservice CI
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      language:
+        required: true
+        type: string
+    secrets:
+      AWS_GITHUB_ACTIONS_ROLE_ARN:
+        required: false
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+      AWS_SESSION_TOKEN:
+        required: false
+
+permissions:
+  contents: write
+  id-token: write
+  security-events: write
+
+jobs:
+  build-test-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        if: inputs.language == 'go'
+        with:
+          go-version: '1.26.10'
+          cache: false
+      - uses: actions/setup-python@v6
+        if: inputs.language == 'python'
+        with:
+          python-version: '3.12'
+      - name: Build and unit tests
+        working-directory: ${{ inputs.service }}
+        shell: bash
+        run: |
+          if [ "${{ inputs.language }}" = "go" ]; then
+            go test ./... -cover
+            go build ./...
+          elif [ -f requirements.txt ]; then
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+            if [ -d tests ]; then pytest -q; else python -m compileall -q .; fi
+          fi
+      - name: Lint and static analysis
+        working-directory: ${{ inputs.service }}
+        shell: bash
+        run: |
+          if [ "${{ inputs.language }}" = "go" ]; then
+            go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+            golangci-lint run
+          else
+            pip install flake8 bandit
+            flake8 .
+            bandit -r . -ll
+          fi
+
+  security:
+    needs: build-test-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        if: inputs.language == 'python'
+        with:
+          python-version: '3.12'
+      - name: Install Python security tooling
+        if: inputs.language == 'python'
+        run: pip install bandit
+      - name: Trivy SCA filesystem scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ inputs.service }}
+          vuln-type: library
+          severity: CRITICAL
+          exit-code: '1'
+      - name: Go SAST
+        if: inputs.language == 'go'
+        uses: securego/gosec@master
+        with:
+          args: ./...
+      - name: Python SAST
+        if: inputs.language == 'python'
+        working-directory: ${{ inputs.service }}
+        run: bandit -r . -ll
+
+  image:
+    needs: security
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      IMAGE_TAG: ${{ github.sha }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: aws-actions/configure-aws-credentials@v5
+        if: env.AWS_ROLE_ARN != ''
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+      - name: Validate AWS credentials configuration
+        if: env.AWS_ROLE_ARN == ''
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ] || [ -z "$AWS_SESSION_TOKEN" ]; then
+            echo "Configure AWS_GITHUB_ACTIONS_ROLE_ARN (OIDC) or all three temporary AWS credential secrets."
+            exit 1
+          fi
+      - uses: aws-actions/configure-aws-credentials@v5
+        if: env.AWS_ROLE_ARN == ''
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ env.AWS_SESSION_TOKEN }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+      - name: Build image
+        run: docker build -t "${{ steps.ecr.outputs.registry }}/${{ inputs.service }}:${IMAGE_TAG}" "${{ inputs.service }}"
+      - name: Scan image and block critical vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.ecr.outputs.registry }}/${{ inputs.service }}:${{ env.IMAGE_TAG }}
+          vuln-type: os,library
+          severity: CRITICAL
+          exit-code: '1'
+      - name: Push image
+        run: docker push "${{ steps.ecr.outputs.registry }}/${{ inputs.service }}:${IMAGE_TAG}"
+      - name: Update GitOps image tag
+        run: |
+          file="gitops/base/${{ inputs.service }}/deployment.yaml"
+          image="${{ steps.ecr.outputs.registry }}/${{ inputs.service }}:${IMAGE_TAG}"
+          sed -i -E "s|image: .*|image: ${image}|" "$file"
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add "$file"
+          git commit -m "chore(gitops): deploy ${{ inputs.service }} ${IMAGE_TAG}" || exit 0
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            if ! git rebase origin/main; then
+              git rebase --abort || true
+              echo "Could not rebase GitOps promotion on the latest main."
+              exit 1
+            fi
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "GitOps push raced with another service; retry $attempt/5."
+            sleep "$((attempt * 2))"
+          done
+          echo "GitOps promotion failed after five attempts."
+          exit 1

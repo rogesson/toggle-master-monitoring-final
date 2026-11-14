@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: targeting-service }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: targeting-service } }
+  template:
+    metadata: { labels: { app: targeting-service } }
+    spec:
+      containers:
+        - name: targeting-service
+          image: 649189683519.dkr.ecr.us-east-1.amazonaws.com/targeting-service:8da5a9b7bf394cfb7fff0a19660a808149906f60
+          ports: [{ containerPort: 8003 }]
+          env:
+            - { name: PORT, value: "8003" }
+            - { name: OTEL_SERVICE_NAME, value: targeting-service }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: http://otel-collector.monitoring.svc.cluster.local:4318 }
+            - { name: OTEL_EXPORTER_OTLP_PROTOCOL, value: http/protobuf }
+            - { name: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED, value: "true" }
+            - { name: OTEL_RESOURCE_ATTRIBUTES, value: deployment.environment.name=staging }
+            - { name: DATABASE_URL, valueFrom: { secretKeyRef: { name: toggle-master-secrets, key: FLAGS_DB_URL } } }
+            - { name: AUTH_SERVICE_URL, valueFrom: { configMapKeyRef: { name: toggle-master-config, key: AUTH_SERVICE_URL } } }
+          readinessProbe: { httpGet: { path: /health, port: 8003 } }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: targeting-service }
+spec:
+  selector: { app: targeting-service }
+  ports: [{ port: 8003, targetPort: 8003 }]

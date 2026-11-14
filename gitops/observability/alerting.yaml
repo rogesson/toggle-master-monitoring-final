@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telemetry-settings
+  namespace: monitoring
+data:
+  NEW_RELIC_OTLP_ENDPOINT: https://otlp.nr-data.net
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-toggle-master
+  namespace: monitoring
+  labels: { grafana_dashboard: "1" }
+data:
+  toggle-master.json: |
+    {
+      "title": "ToggleMaster - Ecossistema",
+      "uid": "toggle-master",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "panels": [
+        {"id": 1, "type": "timeseries", "title": "CPU por pod", "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"toggle-master\"}[5m]))", "legendFormat": "{{pod}}"}], "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}},
+        {"id": 2, "type": "timeseries", "title": "Memória por pod", "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"toggle-master\"})", "legendFormat": "{{pod}}"}], "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}},
+        {"id": 3, "type": "timeseries", "title": "Requisições por serviço", "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "sum by (service_name) (rate(http_server_request_duration_seconds_count[5m]))", "legendFormat": "{{service_name}}"}], "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}},
+        {"id": 4, "type": "timeseries", "title": "Latência p95", "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "histogram_quantile(0.95, sum by (le, service_name) (rate(http_server_request_duration_seconds_bucket[5m])))", "legendFormat": "{{service_name}}"}], "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}},
+        {"id": 5, "type": "logs", "title": "Logs recentes do cluster", "datasource": {"type": "loki", "uid": "loki"}, "targets": [{"expr": "{namespace=\"toggle-master\"}"}], "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16}}
+      ]
+    }

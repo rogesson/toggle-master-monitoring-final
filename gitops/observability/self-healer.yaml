@@ -1,0 +1,117 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: toggle-master-self-healer
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: toggle-master-self-healer
+  namespace: toggle-master
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [evaluation-service]
+    verbs: [patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: toggle-master-self-healer
+  namespace: toggle-master
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: toggle-master-self-healer
+subjects:
+  - kind: ServiceAccount
+    name: toggle-master-self-healer
+    namespace: monitoring
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toggle-master-self-healer
+  namespace: monitoring
+spec:
+  selector:
+    app: toggle-master-self-healer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toggle-master-self-healer
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toggle-master-self-healer
+  template:
+    metadata:
+      labels:
+        app: toggle-master-self-healer
+    spec:
+      serviceAccountName: toggle-master-self-healer
+      containers:
+        - name: self-healer
+          # Reuses the immutable, Trivy-clean Python service image already stored in ECR.
+          image: 649189683519.dkr.ecr.us-east-1.amazonaws.com/analytics-service:1d766da929425d9d94ed7fa13a70318f142db5ad
+          imagePullPolicy: IfNotPresent
+          command: [python, /opt/self-healer.py]
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: SELF_HEALING_WEBHOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: telemetry-secrets
+                  key: SELF_HEALING_WEBHOOK_TOKEN
+            - name: DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: telemetry-secrets
+                  key: DISCORD_WEBHOOK_URL
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+          resources:
+            requests: { cpu: 25m, memory: 48Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: handler
+              mountPath: /opt/self-healer.py
+              subPath: self-healer.py
+              readOnly: true
+      volumes:
+        - name: handler
+          configMap:
+            name: toggle-master-self-healer
+            defaultMode: 0444
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: toggle-master-self-healer
+  namespace: monitoring
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: toggle-master-self-healer

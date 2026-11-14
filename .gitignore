@@ -1,0 +1,13 @@
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/tfplan
+auth-service/auth-service
+evaluation-service/evaluation-service
+terraform/terraform.tfvars
+terraform/backend.hcl
+*.tfvars.json
+.env
+
+__pycache__/
+*.py[cod]

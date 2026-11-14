@@ -1,0 +1,147 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/compare-options: ServerSideDiff=true
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 67.9.0
+    helm:
+      releaseName: kube-prometheus-stack
+      values: |
+        prometheus:
+          prometheusSpec:
+            serviceMonitorSelectorNilUsesHelmValues: false
+            serviceMonitorSelector: {}
+            ruleSelectorNilUsesHelmValues: false
+            ruleSelector: {}
+            additionalScrapeConfigs:
+              - job_name: otel-collector
+                static_configs:
+                  - targets: [otel-collector.monitoring.svc.cluster.local:9464]
+        alertmanager:
+          enabled: true
+          alertmanagerSpec:
+            secrets: [telemetry-secrets]
+          config:
+            global:
+              resolve_timeout: 5m
+            route:
+              receiver: discard
+              group_by: [alertname, service]
+              group_wait: 15s
+              group_interval: 5m
+              repeat_interval: 4h
+              routes:
+                - matchers: ['alertname="EvaluationServiceHigh5xxRate"']
+                  receiver: pagerduty
+                  continue: true
+                - matchers: ['alertname="EvaluationServiceHigh5xxRate"']
+                  receiver: self-healing
+            receivers:
+              - name: discard
+              - name: pagerduty
+                pagerduty_configs:
+                  - routing_key_file: /etc/alertmanager/secrets/telemetry-secrets/PAGERDUTY_ROUTING_KEY
+                    send_resolved: true
+                    severity: '{{ .CommonLabels.severity }}'
+                    description: '{{ .CommonAnnotations.summary }}'
+              - name: self-healing
+                webhook_configs:
+                  - url: http://toggle-master-self-healer.monitoring.svc.cluster.local:8080/alert
+                    send_resolved: false
+                    http_config:
+                      authorization:
+                        type: Bearer
+                        credentials_file: /etc/alertmanager/secrets/telemetry-secrets/SELF_HEALING_WEBHOOK_TOKEN
+        grafana:
+          sidecar:
+            dashboards: { enabled: true, label: grafana_dashboard }
+          additionalDataSources:
+            - name: Loki
+              uid: loki
+              type: loki
+              access: proxy
+              url: http://loki-gateway.monitoring.svc.cluster.local
+              isDefault: false
+        additionalPrometheusRulesMap:
+          toggle-master-rules:
+            groups:
+              - name: toggle-master
+                rules:
+                  - alert: EvaluationServiceHigh5xxRate
+                    expr: sum(rate(http_server_request_duration_seconds_count{service_name="evaluation-service", http_response_status_code=~"5.."}[2m])) / clamp_min(sum(rate(http_server_request_duration_seconds_count{service_name="evaluation-service"}[2m])), 1) > 0.05
+                    for: 1m
+                    labels: { severity: critical, service: evaluation-service }
+                    annotations:
+                      summary: evaluation-service 5xx rate above 5%
+                      description: Sustained HTTP 5xx rate exceeded 5%. Check dashboard and traces.
+  destination: { server: https://kubernetes.default.svc, namespace: monitoring }
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - ClientSideApplyMigration=false
+      - SkipDryRunOnMissingResource=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: { name: loki, namespace: argocd }
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: loki
+    targetRevision: 6.24.0
+    helm:
+      releaseName: loki
+      values: |
+        deploymentMode: SingleBinary
+        loki:
+          auth_enabled: false
+          commonConfig: { replication_factor: 1 }
+          storage: { type: filesystem }
+          limits_config: { retention_period: 168h }
+          compactor:
+            retention_enabled: true
+            delete_request_store: filesystem
+          schemaConfig:
+            configs:
+              - from: "2024-04-01"
+                store: tsdb
+                object_store: filesystem
+                schema: v13
+                index: { prefix: loki_index_, period: 24h }
+        singleBinary:
+          replicas: 1
+          annotations:
+            argocd.argoproj.io/sync-options: Force=true,Replace=true
+          persistence:
+            enabled: false
+          extraVolumes:
+            - name: loki-storage
+              emptyDir: {}
+          extraVolumeMounts:
+            - name: loki-storage
+              mountPath: /var/loki
+        chunksCache:
+          enabled: false
+        resultsCache:
+          enabled: false
+        backend: { replicas: 0 }
+        read: { replicas: 0 }
+        write: { replicas: 0 }
+        minio: { enabled: false }
+        gateway: { enabled: true }
+        lokiCanary: { enabled: false }
+        test: { enabled: false }
+  destination: { server: https://kubernetes.default.svc, namespace: monitoring }
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

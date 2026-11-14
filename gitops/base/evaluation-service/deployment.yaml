@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: evaluation-service }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: evaluation-service } }
+  template:
+    metadata: { labels: { app: evaluation-service } }
+    spec:
+      containers:
+        - name: evaluation-service
+          image: 649189683519.dkr.ecr.us-east-1.amazonaws.com/evaluation-service:c2d43be8df36ae737f7fa0c228bf02de0b14c5d0
+          ports: [{ containerPort: 8004 }]
+          env:
+            - { name: PORT, value: "8004" }
+            - { name: OTEL_SERVICE_NAME, value: evaluation-service }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: otel-collector.monitoring.svc.cluster.local:4317 }
+            - { name: OTEL_ENVIRONMENT, value: staging }
+            - { name: REDIS_URL, valueFrom: { secretKeyRef: { name: toggle-master-secrets, key: REDIS_URL } } }
+            - { name: FLAG_SERVICE_URL, valueFrom: { configMapKeyRef: { name: toggle-master-config, key: FLAG_SERVICE_URL } } }
+            - { name: TARGETING_SERVICE_URL, valueFrom: { configMapKeyRef: { name: toggle-master-config, key: TARGETING_SERVICE_URL } } }
+            - { name: SERVICE_API_KEY, valueFrom: { secretKeyRef: { name: toggle-master-secrets, key: SERVICE_API_KEY } } }
+            - { name: AWS_SQS_URL, valueFrom: { secretKeyRef: { name: toggle-master-secrets, key: AWS_SQS_URL } } }
+          readinessProbe: { httpGet: { path: /health, port: 8004 } }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: evaluation-service }
+spec:
+  selector: { app: evaluation-service }
+  ports: [{ port: 8004, targetPort: 8004 }]

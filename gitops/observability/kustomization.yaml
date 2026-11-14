@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - apps.yaml
+  - collector.yaml
+  - alerting.yaml
+  - external-secret.yaml
+  - self-healer.yaml
+configMapGenerator:
+  - name: toggle-master-self-healer
+    options:
+      disableNameSuffixHash: true
+    files:
+      - self-healer.py

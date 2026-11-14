@@ -1,0 +1,33 @@
+import os
+
+from flask import Flask, jsonify, request
+
+app = Flask(__name__)
+
+
+@app.get("/health")
+def health():
+    return jsonify(service="analytics-service", status="ok")
+
+
+@app.get("/")
+def index():
+    return jsonify(service="analytics-service")
+
+
+@app.post("/events")
+def record_event():
+    event = request.get_json(silent=True) or {}
+    response = jsonify(
+        service="analytics-service",
+        accepted=bool(event),
+        event_type=event.get("type", "unknown"),
+    )
+    return response, 202
+
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",  # nosec B104 - required for Kubernetes traffic
+        port=int(os.getenv("PORT", "8005")),
+    )
