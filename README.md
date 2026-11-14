@@ -8,7 +8,7 @@ rogessonb@gmail.com
 RM: RM373923
 Discord: _resque
 
-- Repositório da Aplicação: https://github.com/rogesson/toggle-master-monitoring
+- Repositório da Aplicação: https://github.com/rogesson/toggle-master-monitoring-final
 
 Videos de Apresentação:
 
